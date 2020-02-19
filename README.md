@@ -34,3 +34,4 @@ PyTorch 1.0 or higher
 
 
 
+stay tuned for IPython (Jupyter) Notebooks...
