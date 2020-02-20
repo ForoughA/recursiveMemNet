@@ -7,7 +7,7 @@ Python 3.6 or higher
 PyTorch 1.0 or higher
 
 ## Visualization tool
-With this tool you can explore the learned representations at the output of each node, the elements of the stack and the learned push and pop operations for each equation from train, test or validation data. Read the using_explore_trace.txt file to understand how to use the tool. Two example outputs of the visualization tool are stored in folder visualization/
+With this tool you can explore the learned representations at the output of each node, the elements of the stack and the learned push and pop operations for each equation from train, test or validation data. Read the [using_explore_trace.txt](https://github.com/ForoughA/recursiveMemNet/blob/master/using_explore_trace.txt) file to understand how to use the tool. Two example outputs of the visualization tool are stored in folder visualization/
 
 ## Navigation
 1. data/ 
