@@ -1,0 +1,40 @@
+An outline for interactively inspecting what the model is doing:
+
+0. train and produce model checkpoints
+    run_40k_gatedpushpop_normalize_no_op.sh
+1. run the trained model at an epoch of choice and log activations
+    trace_40k_gatedpushpop_normalize_no_op.sh
+2. interactively select and visualize model activations for train/test examples
+    explore_trace.sh
+
+Some additional tips for using explore_trace.sh:
+
+After explore_trace.sh is run, you will see an interactive prompt, we try
+to emulate a folder structure for grouping the sets of examples 
+in our data. 
+
+For example, you can type 'ls' to see the current top level folders, and 'cd' to
+select one. At the top level there is train, validation, and test. The next level
+is divided into bins based on whether an equality is predicted correctly by our model.
+For instance, to see correctly predicted examples, you can do 'cd (True,)', 
+and do 'cd (False,)' for incorrect predictions. 'cd ..' will get you to the previous
+level.
+
+A bin is the lowest level folder, once you are in a particular bin, all examples 
+are essentially in a flat list. The initial printed statistics include the count
+for the bin and a percentage N_bin/N_set, (e.g. correct_train/all_train).
+You can select a random batch with the sel command,
+e.g. 'sel mode=random n=10' to select 10 random examples from the bin. 
+Finally, typing the 'plot' command will create visualizations of the equation tree
+and save it to the 'visualizations' directory. 
+
+In the visualization documents, the 'mem' rows of a node represents the stack, 
+the 'act' rows represent push/pop  action (or if the particular version of the 
+model has no-op action, then it will be in the 3rd row). 
+'rep' row of a node represents the output of the node.
+
+You can change the default parameters (--load-epoch and --trace-path in 
+trace_40k_gatedpushpop_normalize_no_op.sh) and (--trace-files in 
+trace_40k_gatedpushpop_normalize_no_op.sh) to explore the model activations for a 
+different epoch.
+

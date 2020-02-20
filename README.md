@@ -28,10 +28,11 @@ PyTorch 1.0 or higher
     - using_explore_trace.txt is a text file that contains instructions for how to use the visualization tool
     - visualization/ the visualization results will be saved in this folder. We have included two visualization examples in this folder just to give a feeling of what to expect. 
     - explore_trace.py python script. There is no need to run this script, we have provided shell scripts for that.
-    - explore_trace.sh shell script for running the visualization tool. Please refer to using_explore_trace.txt to see how to call this
+    - explore_trace.sh shell script for running the visualization tool. Please refer to using_explore_trace.txt to see how to use this
+    - trace_40k_gatedpushpop_normalize_no_op.sh shell script for running the visualization tool. Please refer to using_explore_trace.txt to see how to use this
     - parse.py parses strings into our the tree class in our python code
     - optimizers.py are model optimizers: adam and sgd
 
 
-
+# Notebooks
 stay tuned for IPython (Jupyter) Notebooks...
