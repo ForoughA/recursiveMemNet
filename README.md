@@ -2,13 +2,16 @@
 
 This is the code for the Memory [Augmented Recursive Neural Networks](https://arxiv.org/abs/1911.01545).
 
-# Dependencies
+## Dependencies
 Python 3.6 or higher
 PyTorch 1.0 or higher
 
-# Navigation
+## Visualization tool
+With this tool you can explore the learned representations at the output of each node, the elements of the stack and the learned push and pop operations for each equation from train, test or validation data. Read the using_explore_trace.txt file to understand how to use the tool. Two example outputs of the visualization tool are stored in folder visualization/
+
+## Navigation
 1. data/ 
-    * is a folder containing the data used in all the experiments in reported in the paper. we have included the train/test/validation splits that were used in the paper. There are three files in this folder. 
+    * is a folder containing the data used in all the experiments reported in the paper. we have included the train/test/validation splits that were used in the paper. There are three files in this folder. 
         - data/40k_test.json
         - data/40k_train.json
         - data/40k_val_shallow.json
@@ -33,6 +36,5 @@ PyTorch 1.0 or higher
     - parse.py parses strings into our the tree class in our python code
     - optimizers.py are model optimizers: adam and sgd
 
-
-# Notebooks
+## Notebooks
 stay tuned for IPython (Jupyter) Notebooks...
