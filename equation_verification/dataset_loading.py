@@ -41,6 +41,28 @@ def sequential_sampler(trios, batch_size):
     )
     return loader
 
+def load_equation_completion_blank_example(example_json):
+    example = generate_blank_example(example_json)
+    return load_single_equation_tree_example(example)
+
+def load_equation_completion_batch(example_json, batch_size=1, numeric=False, eval_depth=None, unify_one_zero=True, filter=None, equation_completion=False, candidates=None):
+    test_trio = build_equation_tree_examples_list(example_json, numeric=numeric, depth=eval_depth, unify_one_zero=unify_one_zero, filter=filter, equation_completion=equation_completion, candidates=candidates)
+    test_trio = encoded_batch(test_trio)
+    print("test size: %d" % len(test_trio))
+    # packaging the data using PyTorch compatible structures
+    test_dataset = ExampleDataset(test_trio)
+    test_sampler = SequentialSampler(test_dataset)
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        sampler=test_sampler,
+        num_workers=0,
+        collate_fn=lambda x: x
+        # TODO: learn whether it helps to encode here
+    )
+
+    return test_loader
+
 def load_equation_tree_examples(train_path, validation_path, test_path, batch_size=1, numeric=False, eval_depth=None, unify_one_zero=True, filter=None):
     with open(train_path, "rt") as fin:
         train_json = json.loads(fin.read())
@@ -65,22 +87,25 @@ def load_equation_tree_examples(train_path, validation_path, test_path, batch_si
             num_workers=0,
             collate_fn=lambda x: x  # TODO: learn whether it helps to encode here
         )
-    with open(validation_path, "rt") as fin:
-        validation_json = json.loads(fin.read())
-        validation_trio = build_equation_tree_examples_list(validation_json, depth=eval_depth, unify_one_zero=unify_one_zero, filter=filter)
-        validation_trio = encoded_batch(validation_trio)
-        print("Validation size: %d" % len(validation_trio))
-        # packaging the data using PyTorch compatible structures
-        validation_dataset = ExampleDataset(validation_trio)
-        validation_sampler = SequentialSampler(validation_dataset)
-        validation_loader = DataLoader(
-            validation_dataset,
-            batch_size=batch_size,
-            sampler=validation_sampler,
-            num_workers=0,
-            collate_fn=lambda x: x
-            # TODO: learn whether it helps to encode here
-        )
+    validation_loaders = []
+    for v_path in validation_path:
+        with open(v_path, "rt") as fin:
+            validation_json = json.loads(fin.read())
+            validation_trio = build_equation_tree_examples_list(validation_json, depth=eval_depth, unify_one_zero=unify_one_zero, filter=filter)
+            validation_trio = encoded_batch(validation_trio)
+            print("Validation size: %d" % len(validation_trio))
+            # packaging the data using PyTorch compatible structures
+            validation_dataset = ExampleDataset(validation_trio)
+            validation_sampler = SequentialSampler(validation_dataset)
+            validation_loader = DataLoader(
+                validation_dataset,
+                batch_size=batch_size,
+                sampler=validation_sampler,
+                num_workers=0,
+                collate_fn=lambda x: x
+                # TODO: learn whether it helps to encode here
+            )
+            validation_loaders.append(validation_loader)
     with open(test_path, "rt") as fin:
         test_json = json.loads(fin.read())
         test_trio = build_equation_tree_examples_list(test_json, depth=eval_depth, unify_one_zero=unify_one_zero, filter=filter)
@@ -97,10 +122,10 @@ def load_equation_tree_examples(train_path, validation_path, test_path, batch_si
             collate_fn=lambda x: x
             # TODO: learn whether it helps to encode here
         )
-    return train_loader, train_eval_loader, validation_loader, test_loader
+    return train_loader, train_eval_loader, validation_loaders, test_loader
 
 
-def build_equation_tree_examples_list(json_dataset, numeric=False, depth=None, unify_one_zero=True, filter=None):
+def build_equation_tree_examples_list(json_dataset, numeric=False, depth=None, unify_one_zero=True, filter=None, equation_completion=False, candidates=None):
     """
 
     Args:
@@ -117,18 +142,24 @@ def build_equation_tree_examples_list(json_dataset, numeric=False, depth=None, u
     """
     result = []
     for i, group in enumerate(json_dataset):
-        for example in group:
-            eqn_tree, label, d = load_single_equation_tree_example(example, unify_one_zero=unify_one_zero)
-            assert label in {0, 1}
-            if depth is not None and d not in depth:
-                continue
-            if eqn_tree.is_numeric() and numeric == False:
-                continue # do not add numeric examples unless `numeric` flag set
-            if eqn_tree.is_numeric() and label == 0:
-                continue
-            if filter is not None and not filter(eqn_tree):
-                continue # filter is a criteria for choosing a tree (tree->bool)
-            result.append((eqn_tree, label, d))
+        for base_example in group:
+            if equation_completion:
+                l = generate_complete_examples_from_example_with_hole_and_candidates(base_example, candidates)
+            else:
+                l = [base_example]
+            # if we do equation completion we get an expanded list otherwise we get a singleton list
+            for example in l:
+                eqn_tree, label, d = load_single_equation_tree_example(example, unify_one_zero=unify_one_zero)
+                assert label in {0, 1, -1}
+                if depth is not None and d not in depth:
+                    continue
+                if eqn_tree.is_numeric() and numeric == False:
+                    continue # do not add numeric examples unless `numeric` flag set
+                if eqn_tree.is_numeric() and label == 0:
+                    continue
+                if filter is not None and not filter(eqn_tree):
+                    continue # filter is a criteria for choosing a tree (tree->bool)
+                result.append((eqn_tree, label, d))
     return result
 
 
@@ -164,6 +195,7 @@ def load_single_equation_tree_example(example, unify_one_zero=True):
                      for function, value in zip(functions, values)] # replace Rational_0 with Integer_0
     eqn_tree = BinaryEqnTree.build_from_preorder(functions, values)
     label = int(example['label'])
+    cls = None if "class" not in example else example["class"] # this is only for candidates used in equation completion
     depth = max(int(d) for d in example['equation']["depth"].split(",") if d != "#")
     if eqn_tree.is_numeric():
         if eqn_tree.lchild.maybe_extract_number_constant_node() and eqn_tree.rchild.maybe_extract_number_constant_node():
@@ -183,6 +215,7 @@ def load_single_equation_tree_example(example, unify_one_zero=True):
     eqn_tree.raw = example
     eqn_tree.label = label
     eqn_tree.depth = depth
+    eqn_tree.cls = cls
     return eqn_tree, label, depth
 
 
@@ -219,6 +252,7 @@ class BinaryEqnTree:
         self.raw = raw
         self.label = label
         self.depth = depth
+        self.cls = None
 
     def apply(self, fn):
         if self.lchild is not None:
@@ -251,7 +285,8 @@ class BinaryEqnTree:
 
     def is_numeric(self):
         if self.function_name != "Equality":
-            raise ValueError("is_numeric should only be called on the root of an equation tree")
+            print("Warning: is_numeric should only be called on the root of an equation tree")
+            return False #raise ValueError("is_numeric should only be called on the root of an equation tree")
         return self._is_numeric()
 
     def _is_numeric(self):
@@ -377,6 +412,118 @@ class BinaryEqnTree:
 
         else:
             raise RuntimeError("Uncategorized function name: %s" % function_name)
+
+
+def extract_candidates(candidates_json):
+    result = []
+    for group in candidates_json:
+        for example in group:
+            result.append({"functions":example["equation"]["func"].split(","),
+                           "values":example["equation"]["vars"].split(",")})
+    return result
+
+def generate_complete_examples_from_example_with_hole_and_candidates(example,candidates):
+    goldfunc = example['equation']['func']
+    goldvar = example['equation']['vars']
+    functions = example['equation']['func'].split(",")
+    values = example['equation']['vars'].split(",")
+    nodenum = example['equation']['nodeNum'].split(",")
+    blanknum = example['blankNodeNum']
+    idx = nodenum.index(blanknum)
+    empty = lambda i: nodenum[i] == "#" # "#"
+    leaf = lambda i: (not empty(i)) and (empty(i+1) and empty(i+2)) # "15,#,#"
+    d11 = lambda i: (not empty(i)) and (leaf(i+1)) and (empty(i+4)) # "15,16,#,#,#"
+    d12 = lambda i: (not empty(i)) and (leaf(i+1)) and (leaf(i+4)) #"15,16,#,#,17,#,#"
+    assert leaf(idx) or d11(idx) or d12(idx)
+    #TODO support more deep swaps
+    if leaf(idx):
+        start, end = idx, idx + 3
+    elif d11(idx):
+        start, end = idx, idx + 5
+    elif d12(idx):
+        start, end = idx, idx + 7
+    else:
+        assert False
+    examples = []
+    correctcount = 0
+    for candidate in candidates:
+        candidate_functions = candidate["functions"]
+        candidate_values = candidate["values"]
+        newfunctions = functions[:start] + candidate_functions + functions[end:]
+        newvalues = values[:start] + candidate_values + values[end:]
+        newfunc = ",".join(newfunctions)
+        newvar = ",".join(newvalues)
+        if newfunc == goldfunc and newvar == goldvar:
+            correctcount += 1
+        examples.append({
+            "label": "1" if newfunc == goldfunc and newvar == goldvar else "0",
+            "equation": {
+                "vars":newvar,
+                "func":newfunc,
+                "depth":example["equation"]["depth"],
+            }
+        })
+    if correctcount != 1:
+        print(correctcount)
+        for candidate in candidates:
+            candidate_functions = candidate["functions"]
+            candidate_values = candidate["values"]
+            newfunctions = functions[:start] + candidate_functions + functions[end:]
+            newvalues = values[:start] + candidate_values + values[end:]
+            newfunc = ",".join(newfunctions)
+            newvar = ",".join(newvalues)
+            print(candidate)
+            print(functions[end:])
+            print(newfunc)
+            print(newvar)
+            print("--------")
+        print(json.dumps(example,indent=4))
+        print(start, end)
+    assert correctcount == 1
+    return examples
+
+def generate_blank_example(example):
+    goldfunc = example['equation']['func']
+    goldvar = example['equation']['vars']
+    functions = example['equation']['func'].split(",")
+    values = example['equation']['vars'].split(",")
+    nodenum = example['equation']['nodeNum'].split(",")
+    blanknum = example['blankNodeNum']
+    idx = nodenum.index(blanknum)
+    empty = lambda i: nodenum[i] == "#" # "#"
+    leaf = lambda i: (not empty(i)) and (empty(i+1) and empty(i+2)) # "15,#,#"
+    d11 = lambda i: (not empty(i)) and (leaf(i+1)) and (empty(i+4)) # "15,16,#,#,#"
+    d12 = lambda i: (not empty(i)) and (leaf(i+1)) and (leaf(i+4)) #"15,16,#,#,17,#,#"
+    assert leaf(idx) or d11(idx) or d12(idx)
+    #TODO support more deep swaps
+    if leaf(idx):
+        start, end = idx, idx + 3
+    elif d11(idx):
+        start, end = idx, idx + 5
+    elif d12(idx):
+        start, end = idx, idx + 7
+    else:
+        assert False
+    examples = []
+    correctcount = 0
+    for candidate in [{"functions":["NaN","#","#"], "values":["NaN", "#", "#"]}]:
+        candidate_functions = candidate["functions"]
+        candidate_values = candidate["values"]
+        newfunctions = functions[:start] + candidate_functions + functions[end:]
+        newvalues = values[:start] + candidate_values + values[end:]
+        newfunc = ",".join(newfunctions)
+        newvar = ",".join(newvalues)
+        if newfunc == goldfunc and newvar == goldvar:
+            correctcount += 1
+        examples.append({
+            "label": "1" if newfunc == goldfunc and newvar == goldvar else "0",
+            "equation": {
+                "vars":newvar,
+                "func":newfunc,
+                "depth":example["equation"]["depth"],
+            }
+        })
+    return examples[0]
 
 class ExampleDataset(Dataset):
     """

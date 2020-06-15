@@ -11,6 +11,7 @@ from torch.autograd import Variable
 from equation_verification.constants import VOCAB, SYMBOL_CLASSES, CONSTANTS, BINARY_FNS, UNARY_FNS, \
     NUMBER_ENCODER, SYMBOL_ENCODER, NUMBER_DECODER
 from equation_verification.dataset_loading import BinaryEqnTree
+from equation_verification.sequential_model import LSTMchain, RNNchain
 
 def build_nnTree(model_class,
                  num_hidden,
@@ -89,6 +90,12 @@ def build_nnTree(model_class,
                              gate_push_pop=gate_push_pop,
                              gate_top_k=gate_top_k,
                              normalize_action=normalize_action)
+    elif model_class == 'LSTMchain':
+        model = LSTMchain(num_hidden,
+                          dropout)
+    elif model_class == 'RNNchain':
+        model = RNNchain(num_hidden,
+                         dropout)
         
     else:
         raise ValueError("Unknown model class:%s" %model_class)
@@ -121,6 +128,7 @@ class LSTMTrees(torch.nn.Module):
                                                    embedding_dim=num_hidden))
         self.bias = nn.Parameter(torch.FloatTensor([0]))
         self.num_hidden = num_hidden
+        self.dropout = dropout
 
     def forward(self, tree, trace=None):
         if not tree.is_leaf and tree.function_name not in self._modules:
@@ -129,7 +137,7 @@ class LSTMTrees(torch.nn.Module):
             hl, cl = self(tree.lchild, trace=trace.lchild if trace else None)
             hr, cr = self(tree.rchild, trace=trace.rchild if trace else None)
             nn_block = getattr(self, tree.function_name)
-            return nn_block((hl, cl), (hr, cr), trace=trace)
+            return nn_block((hl, cl), (hr, cr), trace=trace, dropout=self.dropout)
         elif tree.is_unary:
             hl, cl = self(tree.lchild, trace=trace.lchild if trace else None)
             nn_block = getattr(self, tree.function_name)
@@ -141,7 +149,7 @@ class LSTMTrees(torch.nn.Module):
                     trace.output = h.tolist()
                     trace.memory = c.tolist()
             else:
-                h, c = nn_block((hl, cl), trace=trace)
+                h, c = nn_block((hl, cl), trace=trace, dropout=self.dropout)
             return h, c
         elif tree.is_leaf:
             c = Variable(torch.FloatTensor([0] * self.num_hidden))
@@ -187,7 +195,8 @@ class LSTMTrees(torch.nn.Module):
                 "label": round(label.item()),
                 "loss": loss.item(),
                 "correct": correct,
-                "depth": depth
+                "depth": depth,
+                "score": out[1].item() if not tree.is_numeric() else lchild.item() # WARNING: only works for symbolic data
             })
             total_loss += loss
         return record, total_loss / len(batch)
@@ -213,7 +222,7 @@ class BinaryLSTMNode(torch.nn.Module):
         self.input_right = nn.Linear(num_input, num_hidden, bias=False)
         self.input_bias = nn.Parameter(torch.FloatTensor([0] * num_hidden))
 
-    def forward(self, input_left, input_right, trace=None):
+    def forward(self, input_left, input_right, trace=None, dropout=None):
         """
 
         Args:
@@ -234,7 +243,10 @@ class BinaryLSTMNode(torch.nn.Module):
                                hr) + self.forget_bias_right)
         o = F.sigmoid(self.output_left(hl) + self.output_right(hr) + self.output_bias)
         u = F.tanh(self.input_left(hl) + self.input_right(hr) + self.input_bias)
-        c = i * u + f_left * cl + f_right * cr
+        if dropout is None:
+            c = i * u + f_left * cl + f_right * cr
+        else:
+            c = i * F.dropout(u,p=dropout,training=self.training) + f_left * cl + f_right * cr
         h = o * F.tanh(c)
         if trace:
             trace.output = h.tolist()
@@ -251,7 +263,7 @@ class UnaryLSTMNode(torch.nn.Module):
         self.output = nn.Linear(num_input, num_hidden, bias=True)
         self.input = nn.Linear(num_input, num_hidden, bias=True)
 
-    def forward(self, inp, trace=None):
+    def forward(self, inp, trace=None, dropout=None):
         """
 
         Args:
@@ -265,7 +277,10 @@ class UnaryLSTMNode(torch.nn.Module):
         f = F.sigmoid(self.forget(h))
         o = F.sigmoid(self.output(h))
         u = F.tanh(self.input(h))
-        c = i * u + f * c
+        if dropout is None:
+            c = i * u + f * c
+        else:
+            c = i * F.dropout(u,p=dropout,training=self.training) + f * c
         h = o * F.tanh(c)
         if trace:
             trace.output = h.tolist()
@@ -302,6 +317,7 @@ class NNTrees(torch.nn.Module):
         setattr(self, SYMBOL_ENCODER, nn.Embedding(num_embeddings=len(VOCAB),
                                    embedding_dim=num_hidden))
         self.bias = nn.Parameter(torch.FloatTensor([0]))
+        self.dropout = dropout
 
     def forward(self, tree, trace=None):
         if not tree.is_leaf and tree.function_name not in self._modules:
@@ -310,13 +326,13 @@ class NNTrees(torch.nn.Module):
             lchild = self(tree.lchild, trace=trace.lchild if trace else None)
             rchild = self(tree.rchild, trace=trace.rchild if trace else None)
             nn_block = getattr(self, tree.function_name)
-            return nn_block(lchild, rchild, trace=trace)
+            return nn_block(lchild, rchild, trace=trace, dropout=self.dropout)
         elif tree.is_unary:
             child = self(tree.lchild, trace=trace.lchild if trace else None)
             nn_block = getattr(self, tree.function_name)
             if tree.function_name in {NUMBER_DECODER, NUMBER_ENCODER, SYMBOL_ENCODER}:
                 return nn_block(child)
-            return nn_block(child)
+            return nn_block(child, dropout=self.dropout)
         elif tree.is_leaf:
             if trace:
                 trace.output = tree.encoded_value.tolist()
@@ -357,7 +373,8 @@ class NNTrees(torch.nn.Module):
                 "label": round(label.item()),
                 "loss": loss.item(),
                 "correct": correct,
-                "depth": depth
+                "depth": depth,
+                "score": out[1].item() if not tree.is_numeric() else lchild.item() # WARNING: only works for symbolic data
             })
             total_loss += loss
         return record, total_loss / len(batch)
@@ -374,7 +391,7 @@ class BinaryNNNode(torch.nn.Module):
         else:
             raise ValueError("Unhandled activation: %s" % activation)
 
-    def forward(self, input_left, input_right, trace=None):
+    def forward(self, input_left, input_right, trace=None, dropout=None):
         """
 
         Args:
@@ -387,6 +404,10 @@ class BinaryNNNode(torch.nn.Module):
         inp = torch.cat((input_left, input_right), dim=0)
         tmp = self.linear(inp)
         output = self.activation(tmp)
+        if dropout is not None:
+            output = F.dropout(output,p=dropout,training=self.training)
+        else:
+            pass
         if trace:
             trace.output = output.tolist()
         return output
@@ -404,7 +425,7 @@ class UnaryNNNode(torch.nn.Module):
         else:
             raise ValueError("Unhandled activation: %s" % activation)
 
-    def forward(self, inp, trace=None):
+    def forward(self, inp, trace=None, dropout=None):
         """
 
         Args:
@@ -415,6 +436,10 @@ class UnaryNNNode(torch.nn.Module):
         """
         tmp = self.linear(inp)
         output = self.activation(tmp)
+        if dropout is not None:
+            output = F.dropout(output,p=dropout,training=self.training)
+        else:
+            pass
         if trace:
             trace.output = output.tolist()
         return output
@@ -580,6 +605,7 @@ class StackNNTrees(torch.nn.Module):
         self.bias = nn.Parameter(torch.FloatTensor([0]))
         self.disable_sharing = disable_sharing
         print("disable_sharing", self.disable_sharing, file=sys.stderr)
+        self.dropout = dropout
 
     def forward(self, tree, trace=None):
         if not tree.is_leaf and tree.function_name not in self._modules:
@@ -592,7 +618,7 @@ class StackNNTrees(torch.nn.Module):
             rchild, rstack = self(tree.rchild, trace=trace.rchild if trace else None)
             nn_block = getattr(self, tree.function_name)
             stack_block = self.binary_stack if not self.disable_sharing else getattr(self, tree.function_name + "_stack")
-            output = nn_block(lchild, rchild, lstack, rstack, trace=trace)
+            output = nn_block(lchild, rchild, lstack, rstack, trace=trace, dropout=self.dropout)
             output_stack = stack_block(lchild, rchild, lstack, rstack, trace=trace)
             if self.verbose:
                 print('output at node {0} is {1}'.format(tree.function_name, output))
@@ -609,7 +635,7 @@ class StackNNTrees(torch.nn.Module):
                 output_stack = stack
             else:
                 stack_block = self.unary_stack if not self.disable_sharing else getattr(self, tree.function_name + "_stack")
-                output = nn_block(child, stack, trace=trace)
+                output = nn_block(child, stack, trace=trace, dropout=self.dropout)
                 output_stack = stack_block(child, stack, trace=trace)
             
             if self.verbose:
@@ -676,7 +702,8 @@ class StackNNTrees(torch.nn.Module):
                 "label": round(label.item()),
                 "loss": loss.item(),
                 "correct": correct,
-                "depth": depth
+                "depth": depth,
+                "score": out[1].item() if not tree.is_numeric() else lchild.item() # WARNING: only works for symbolic data
             })
             total_loss += loss
         return record, total_loss / len(batch)
@@ -1286,7 +1313,7 @@ class BinaryFullStackNNNodeGated(torch.nn.Module):
         self.normalize_action = normalize_action
 
 
-    def forward(self, input_left, input_right, stack_left, stack_right, trace=None):
+    def forward(self, input_left, input_right, stack_left, stack_right, trace=None, dropout=None):
         """
         Args:
             input_left: (num_input,)
@@ -1324,6 +1351,8 @@ class BinaryFullStackNNNodeGated(torch.nn.Module):
 
         push_input = self.input_linear(inp).unsqueeze(0) # (1,num_input)
         push_input = self.stack_activations(push_input)
+        if dropout is not None:
+            push_input = F.dropout(push_input, p=dropout, training=self.training)
         if self.likeLSTM:
             data_gate = self.data_linear(inp)
             data_gate = F.sigmoid(data_gate)
@@ -1430,7 +1459,7 @@ class UnaryFullStackNNNodeGated(torch.nn.Module):
         self.normalize_action = normalize_action
 
 
-    def forward(self, inp, stack, trace=None):
+    def forward(self, inp, stack, trace=None, dropout=None):
         """
         Args:
             inp: (num_input,)
@@ -1462,6 +1491,8 @@ class UnaryFullStackNNNodeGated(torch.nn.Module):
 
         push_input = self.input_linear(inp).unsqueeze(0) # (1,num_input)
         push_input = self.stack_activations(push_input)
+        if dropout is not None:
+            push_input = F.dropout(push_input, p=dropout, training=self.training)
         if self.likeLSTM:
             data_gate = self.data_linear(inp)
             data_gate = F.sigmoid(data_gate)
@@ -1764,7 +1795,8 @@ class QueueNNTrees(torch.nn.Module):
                 "label": round(label.item()),
                 "loss": loss.item(),
                 "correct": correct,
-                "depth": depth
+                "depth": depth,
+                "score": out[1].item() if not tree.is_numeric() else lchild.item() # WARNING: only works for symbolic data
             })
             total_loss += loss
         return record, total_loss / len(batch)
@@ -1893,7 +1925,7 @@ class BinaryMemoryNNNode(torch.nn.Module):
         self.top_k = top_k
         self.memory_type = memory_type
 
-    def forward(self, input_left, input_right, memory_left, memory_right, trace=None):
+    def forward(self, input_left, input_right, memory_left, memory_right, trace=None, dropout=None):
         """
         Args:
             input_left: (num_input,)
@@ -1917,7 +1949,10 @@ class BinaryMemoryNNNode(torch.nn.Module):
         tmp1 = self.linear(inp)
         tmp2 = self.memory_linear(memory)
         output = self.activation(tmp1 + tmp2)
-
+        if dropout is not None:
+            output = F.dropout(output,p=dropout,training=self.training)
+        else:
+            pass
         if trace:
             trace.output = output.tolist()
         return output
@@ -1942,7 +1977,7 @@ class UnaryMemoryNNNode(torch.nn.Module):
         self.top_k = top_k
         self.memory_type = memory_type
 
-    def forward(self, inp, memory, trace=None):
+    def forward(self, inp, memory, trace=None, dropout=None):
         """
         Args:
             inp: (num_input,)
@@ -1960,7 +1995,10 @@ class UnaryMemoryNNNode(torch.nn.Module):
         tmp1 = self.linear(inp)
         tmp2 = self.memory_linear(memory.squeeze(1))
         output = self.activation(tmp1 + tmp2)
-
+        if dropout is not None:
+            output = F.dropout(output,p=dropout,training=self.training)
+        else:
+            pass
         if trace:
             trace.output = output.tolist()
         return output
@@ -2103,7 +2141,8 @@ class StackLSTMTrees(torch.nn.Module):
                 "label": round(label.item()),
                 "loss": loss.item(),
                 "correct": correct,
-                "depth": depth
+                "depth": depth,
+                "score": out[1].item() if not tree.is_numeric() else lchild.item() # WARNING: only works for symbolic data
             })
             total_loss += loss
         return record, total_loss / len(batch)
@@ -2522,6 +2561,7 @@ class StackNNTreesMem2out(torch.nn.Module):
         self.stack_type = stack_type
 
         self.bias = nn.Parameter(torch.FloatTensor([0]))
+        self.dropout = dropout
 
     def forward(self, tree, trace=None):
         if not tree.is_leaf and tree.function_name not in self._modules:
@@ -2534,7 +2574,7 @@ class StackNNTreesMem2out(torch.nn.Module):
             rchild, rstack = self(tree.rchild, trace=trace.rchild if trace else None)
             nn_block = getattr(self, tree.function_name)
             stack_block = getattr(self, tree.function_name+'_stack')
-            output_stack = stack_block(lchild, rchild, lstack, rstack, trace=trace)
+            output_stack = stack_block(lchild, rchild, lstack, rstack, trace=trace, dropout=self.dropout)
             output = nn_block(lchild, rchild, output_stack, trace=trace)
             if self.verbose:
                 print('output at node {0} is {1}'.format(tree.function_name, output))
@@ -2554,7 +2594,7 @@ class StackNNTreesMem2out(torch.nn.Module):
                     trace.memory = stack.tolist()
             else:
                 stack_block = getattr(self, tree.function_name + '_stack')
-                output_stack = stack_block(child, stack, trace=trace)
+                output_stack = stack_block(child, stack, trace=trace, dropout=self.dropout)
                 output = nn_block(child, output_stack, trace=trace)
 
             if self.verbose:
@@ -2621,7 +2661,8 @@ class StackNNTreesMem2out(torch.nn.Module):
                 "label": round(label.item()),
                 "loss": loss.item(),
                 "correct": correct,
-                "depth": depth
+                "depth": depth,
+                "score": out[1].item() if not tree.is_numeric() else lchild.item() # WARNING: only works for symbolic data
             })
             total_loss += loss
         return record, total_loss / len(batch)
@@ -2915,3 +2956,4 @@ class UnaryFullQueueNNNodeGated(torch.nn.Module):
             trace.action = action.tolist()
             trace.memory = stack.tolist()
         return stack
+

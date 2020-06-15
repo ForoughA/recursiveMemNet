@@ -1,4 +1,5 @@
 import argparse
+import math
 import pickle
 import traceback
 
@@ -13,7 +14,7 @@ from equation_verification.nn_tree_model import build_nnTree
 from optimizers import build_optimizer
 from parse import parse_equation
 from equation_verification.constants import UNARY_FNS
-
+from equation_verification.sequential_model import LSTMchain
 
 class nnTreeEquationVerificationExperiment:
 
@@ -45,7 +46,7 @@ class nnTreeEquationVerificationExperiment:
                             help='beta 1 for optimizer')
         parser.add_argument('--beta2', type=float, default=0.999,
                             help='beta 2 for optimizer')
-        parser.add_argument('--dropout', type=float, default=0.2,
+        parser.add_argument('--dropout', type=float, default=None,
                             help='dropout probability (1.0 - keep probability)')
 
         # define and parse conditions of the experiment from commandline
@@ -55,8 +56,8 @@ class nnTreeEquationVerificationExperiment:
                             help='path to training examples')
         parser.add_argument('--unify-one-zero', type=eval, default=True,
                             help='whether to unify ones and zeros to integer')
-        parser.add_argument('--validation-path', type=str, default=None,
-                            help='path to validation examples')
+        parser.add_argument('--validation-path', type=str, default=None, nargs="+",
+                            help='path(s) to validation examples, if multiple files supplied, will evaluate each individually')
         parser.add_argument('--test-path', type=str, default=None,
                             help='path to test examples')
         parser.add_argument('--num-epochs', type=int, default=100,
@@ -138,6 +139,8 @@ class nnTreeEquationVerificationExperiment:
                             help='save model for every n epochs')
         parser.add_argument('--interactive', action='store_true', default=False,
                             help='interactive evaluation')
+        parser.add_argument('--force-result', action='store_true', default=False,
+                            help='force write to result in evaluate only')
 
         self.args = parser.parse_args()
 
@@ -195,7 +198,7 @@ class nnTreeEquationVerificationExperiment:
         symbolic_precision = symbolic_true_positive / (symbolic_true_positive + symbolic_false_positive) if (symbolic_true_positive + symbolic_false_positive) != 0 else 0
         symbolic_recall = symbolic_true_positive / (symbolic_true_positive + symbolic_false_negative) if (symbolic_true_positive + symbolic_false_negative) != 0 else 0
         symbolic_f1 = 2 * (symbolic_precision * symbolic_recall) / (symbolic_precision + symbolic_recall) if (symbolic_precision + symbolic_recall) != 0 else 0
-
+        symbolic_spc = symbolic_true_negative / (symbolic_true_negative + symbolic_false_positive) if (symbolic_true_negative + symbolic_false_positive) != 0 else 0
         assert numeric_count == (
         numeric_true_positive + numeric_false_positive
         + numeric_true_negative + numeric_false_negative)
@@ -212,12 +215,76 @@ class nnTreeEquationVerificationExperiment:
         numeric_f1 = 2 * (numeric_precision * numeric_recall) / (
         numeric_precision + numeric_recall) if (
                                              numeric_precision + numeric_recall) != 0 else 0
-
+        print("overall")
+        bins = [0] * 20
+        unit = 1/len(bins)
+        for item in record:
+            bin_idx = math.floor((math.exp(item["score"])/(1+math.exp(item["score"])) / unit))
+            if bin_idx >= len(bins):
+                assert bin_idx == len(bins)
+                bin_idx = bin_idx - 1
+            bins[bin_idx] += 1
+        maxcnt = max(bins)
+        normalized_bins = [cnt/maxcnt for cnt in bins]
+        print("1.0")
+        for ncnt in reversed(normalized_bins):
+            print(max(math.ceil(ncnt), math.ceil(ncnt * 60) )* "+")
+        normalized_bins = [cnt/sum(bins) for cnt in bins]
+        print("0.0")
+        print("1.0")
+        for ncnt in reversed(normalized_bins):
+            print(max(math.ceil(ncnt), math.ceil(ncnt * 60) )* "+")
+        print("0.0")
+        print("condition positive")
+        bins = [0] * 20
+        unit = 1/len(bins)
+        for item in record:
+            if item["label"] == 0: continue
+            bin_idx = math.floor((math.exp(item["score"])/(1+math.exp(item["score"])) / unit))
+            if bin_idx >= len(bins):
+                assert bin_idx == len(bins)
+                bin_idx = bin_idx - 1
+            bins[bin_idx] += 1
+        maxcnt = max(bins)
+        if maxcnt > 0:
+            normalized_bins = [cnt/maxcnt for cnt in bins]
+            print("1.0")
+            for ncnt in reversed(normalized_bins):
+                print(max(math.ceil(ncnt), math.ceil(ncnt * 60) )* "+")
+            normalized_bins = [cnt/sum(bins) for cnt in bins]
+            print("0.0")
+            print("1.0")
+            for ncnt in reversed(normalized_bins):
+                print(max(math.ceil(ncnt), math.ceil(ncnt * 60) )* "+")
+            print("0.0")
+        print("condition negative")
+        bins = [0] * 20
+        unit = 1/len(bins)
+        for item in record:
+            if item["label"] == 1: continue
+            bin_idx = math.floor((math.exp(item["score"])/(1+math.exp(item["score"])) / unit))
+            if bin_idx >= len(bins):
+                assert bin_idx == len(bins)
+                bin_idx = bin_idx - 1
+            bins[bin_idx] += 1
+        maxcnt = max(bins)
+        if maxcnt > 0:
+            normalized_bins = [cnt/maxcnt for cnt in bins]
+            print("1.0")
+            for ncnt in reversed(normalized_bins):
+                print(max(math.ceil(ncnt), math.ceil(ncnt * 60) )* "+")
+            normalized_bins = [cnt/sum(bins) for cnt in bins]
+            print("0.0")
+            print("1.0")
+            for ncnt in reversed(normalized_bins):
+                print(max(math.ceil(ncnt), math.ceil(ncnt * 60) )* "+")
+            print("0.0")
         return {
                 "sym_loss_avg": symbolic_loss / symbolic_count if symbolic_count != 0 else 0,
                 "sym_acc": symbolic_accuracy,
                 "sym_precision": symbolic_precision,
                 "sym_recall": symbolic_recall,
+                "sym_spc": symbolic_spc,
                 "sym_f1": symbolic_f1,
                 "sym_count": symbolic_count,
                 "num_loss_avg": numeric_loss / numeric_count if numeric_count != 0 else 0,
@@ -255,11 +322,11 @@ class nnTreeEquationVerificationExperiment:
         depths = sorted(list(set(item["depth"] for item in record)))
         stats = self.aggregate_statistics(record)
         print("epoch={} set={} loss={} depth=all sym_loss={} "
-              "sym_acc={} sym_prec={} sym_rec={} sym_f1={} "
+              "sym_acc={} sym_prec={} sym_rec={} sym_spc={} sym_f1={} "
               "sym_count={}".format(
             epoch, name, loss,
             stats["sym_loss_avg"], stats["sym_acc"],
-            stats["sym_precision"], stats["sym_recall"],
+            stats["sym_precision"], stats["sym_recall"],stats["sym_spc"],
             stats["sym_f1"], stats["sym_count"]
         ))
         print("epoch={} set={} loss={} depth=all num_loss={} "
@@ -275,11 +342,11 @@ class nnTreeEquationVerificationExperiment:
             for depth in depths:
                 stats_d = self.aggregate_statistics(record, depth=depth)
                 print("epoch={} set={} loss={} depth={} sym_loss={} "
-                      "sym_acc={} sym_prec={} sym_rec={} sym_f1={} "
+                      "sym_acc={} sym_prec={} sym_rec={} sym_spc={} sym_f1={} "
                       "sym_count={}".format(
                     epoch, name, None, depth,
                     stats_d["sym_loss_avg"], stats_d["sym_acc"],
-                    stats_d["sym_precision"], stats_d["sym_recall"],
+                    stats_d["sym_precision"], stats_d["sym_recall"],stats["sym_spc"],
                     stats_d["sym_f1"], stats_d["sym_count"]
                 ))
                 print("epoch={} set={} loss={} depth={} num_loss={} "
@@ -312,7 +379,7 @@ class nnTreeEquationVerificationExperiment:
         torch.manual_seed(self.args.seed)
         random.seed(self.args.seed)
         if not self.args.interactive:
-            train_loader, train_eval_loader, validation_loader, test_loader = load_equation_tree_examples(
+            train_loader, train_eval_loader, validation_loaders, test_loader = load_equation_tree_examples(
                 self.args.train_path,
                 self.args.validation_path,
                 self.args.test_path,
@@ -395,9 +462,10 @@ class nnTreeEquationVerificationExperiment:
         elif self.args.evaluate_only:
             trace = dict()
             self.load_model_and_optim(self.args.load_epoch, model, optimizer)
-            self.eval_and_log(model, train_eval_loader, "train", self.args.load_epoch, "tmp", trace=trace)
-            self.eval_and_log(model, validation_loader, "validation", self.args.load_epoch, "tmp", trace=trace)
-            self.eval_and_log(model, test_loader, "test", self.args.load_epoch, "tmp", trace=trace)
+            self.eval_and_log(model, train_eval_loader, "train", self.args.load_epoch, "tmp" if not self.args.force_result else self.args.result_path, trace=trace)
+            for i, vi in enumerate(validation_loaders):
+                self.eval_and_log(model, vi, "validation:%d" % i, self.args.load_epoch, "tmp" if not self.args.force_result else self.args.result_path, trace=trace)
+            self.eval_and_log(model, test_loader, "test", self.args.load_epoch, "tmp" if not self.args.force_result else self.args.result_path, trace=trace)
             if self.args.trace_path:
                 with open(self.args.trace_path, "wb") as f:
                     f.write(pickle.dumps(trace))
@@ -443,8 +511,9 @@ class nnTreeEquationVerificationExperiment:
                 if epoch % self.args.disp_epoch is 0:
                     # self.eval_and_log(model, train_eval_loader, "train", epoch,
                     #                   self.args.result_path)
-                    self.eval_and_log(model, validation_loader, "validation",
-                                      epoch, self.args.result_path)
+                    for i, vi in enumerate(validation_loaders):
+                        self.eval_and_log(model, vi, "validation:%d" % i,
+                                          epoch, self.args.result_path)
                     self.eval_and_log(model, test_loader, "test", epoch,
                                       self.args.result_path)
                 if epoch % self.args.checkpoint_every_n_epochs == 0:
