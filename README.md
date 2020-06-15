@@ -1,6 +1,6 @@
 # Memory Augmented Recursive Neural Networks
 
-This is the code for the Memory [Tree Stack Memory Units](https://arxiv.org/abs/1911.01545).
+This is the code for the [Tree Stack Memory Units](https://arxiv.org/abs/1911.01545).
 
 ## Dependencies
 Python 3.6 or higher
