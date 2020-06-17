@@ -1,4 +1,4 @@
-# Memory Augmented Recursive Neural Networks
+# Tree Stack Memory Units
 
 This is the code for the [Tree Stack Memory Units](https://arxiv.org/abs/1911.01545).
 
